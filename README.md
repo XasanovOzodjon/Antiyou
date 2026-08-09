@@ -2,6 +2,8 @@
 
 Ochiq ota-ona nazorati tizimi: FastAPI backend + bolalar Android ilovasi + ota-ona Android ilovasi.
 
+**Kubuntu’da boshidan ishga tushirish:** [KUBUNTU_RUN.md](KUBUNTU_RUN.md)
+
 ## Tarkib
 
 | Papka | Vazifa |
