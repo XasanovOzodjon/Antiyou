@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+uploads/
+*.egg-info/
+.pytest_cache/
+
+# Android
+**/build/
+**/.gradle/
+**/local.properties
+**/.idea/
+*.iml
+*.apk
+*.aab
+.DS_Store
+
+# IDE
+.vscode/
+*.swp
