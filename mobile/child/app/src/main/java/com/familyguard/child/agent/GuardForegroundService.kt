@@ -93,18 +93,22 @@ class GuardForegroundService : Service() {
         val stats = usm.queryAndAggregateUsageStats(start, end)
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(start))
         val pm = packageManager
-        val items = stats.values
-            .filter { it.totalTimeInForeground > 0 }
-            .map { st ->
+        val usedMs = stats.values.associate { it.packageName to it.totalTimeInForeground }
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val launchable = pm.queryIntentActivities(launcher, 0)
+        val items = launchable
+            .map { it.activityInfo.packageName }
+            .distinct()
+            .map { pkg ->
                 val label = try {
-                    pm.getApplicationLabel(pm.getApplicationInfo(st.packageName, 0)).toString()
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
                 } catch (_: Exception) {
-                    st.packageName
+                    pkg
                 }
                 mapOf(
-                    "package_name" to st.packageName,
+                    "package_name" to pkg,
                     "app_label" to label,
-                    "total_ms" to st.totalTimeInForeground,
+                    "total_ms" to (usedMs[pkg] ?: 0L),
                     "day" to day,
                 )
             }

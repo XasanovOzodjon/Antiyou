@@ -47,7 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -340,6 +340,7 @@ fun SmsTab() {
 fun NotificationsTab() {
     val items = remember { mutableStateListOf<NotificationItem>() }
     val api = remember { ApiClient(ParentApp.instance.session) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         while (true) {
             runCatching {
@@ -351,13 +352,33 @@ fun NotificationsTab() {
         }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
-        item { Text("Bildirishnomalar", fontWeight = FontWeight.Bold, fontSize = 22.sp) }
-        items(items) { n ->
+        item {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Bildirishnomalar", fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { api.deleteAllNotifications() }
+                        items.clear()
+                    }
+                }) { Text("Hammasini o‘chir") }
+            }
+        }
+        items(items, key = { it.id }) { n ->
             Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(n.title ?: n.packageName, fontWeight = FontWeight.SemiBold)
                     Text(n.text ?: "")
                     Text("${n.packageName} · ${n.postedAt}", fontSize = 11.sp, color = Color.Gray)
+                    TextButton(onClick = {
+                        scope.launch {
+                            runCatching { api.deleteNotification(n.id) }
+                            items.removeAll { it.id == n.id }
+                        }
+                    }) { Text("O‘chirish") }
                 }
             }
         }

@@ -92,16 +92,20 @@ class SmsSyncRequest(BaseModel):
     items: list[SmsItem]
 
 
-class NotificationItem(BaseModel):
+class NotificationCapture(BaseModel):
     package_name: str
     title: str | None = None
     text: str | None = None
     posted_at: datetime
 
 
+class NotificationItem(NotificationCapture):
+    id: int
+
+
 class NotificationSyncRequest(BaseModel):
     device_id: int
-    items: list[NotificationItem]
+    items: list[NotificationCapture]
 
 
 class HeartbeatRequest(BaseModel):

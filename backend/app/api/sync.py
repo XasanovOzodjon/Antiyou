@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_child, require_parent
@@ -141,7 +141,24 @@ async def sync_notifications(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await _assert_device(db, user, body.device_id)
+    added = 0
+    seen: set[tuple] = set()
     for item in body.items:
+        key = (item.package_name, item.title, item.text, item.posted_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        existing = await db.execute(
+            select(NotificationEvent).where(
+                NotificationEvent.device_id == body.device_id,
+                NotificationEvent.package_name == item.package_name,
+                NotificationEvent.title == item.title,
+                NotificationEvent.text == item.text,
+                NotificationEvent.posted_at == item.posted_at,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
         db.add(
             NotificationEvent(
                 family_id=user.family_id,
@@ -152,24 +169,24 @@ async def sync_notifications(
                 posted_at=item.posted_at,
             )
         )
+        added += 1
     await db.commit()
-    return {"ok": True, "count": len(body.items)}
+    return {"ok": True, "count": added}
 
 
 @router.get("/notifications", response_model=list[NotificationItem])
 async def list_notifications(
-    limit: int = 100,
     user: User = Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationItem]:
     result = await db.execute(
         select(NotificationEvent)
         .where(NotificationEvent.family_id == user.family_id)
-        .order_by(NotificationEvent.posted_at.desc())
-        .limit(min(limit, 200))
+        .order_by(NotificationEvent.posted_at.desc(), NotificationEvent.id.desc())
     )
     return [
         NotificationItem(
+            id=r.id,
             package_name=r.package_name,
             title=r.title,
             text=r.text,
@@ -177,6 +194,32 @@ async def list_notifications(
         )
         for r in result.scalars().all()
     ]
+
+
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    user: User = Depends(require_parent),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    row = await db.get(NotificationEvent, notification_id)
+    if not row or row.family_id != user.family_id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await db.delete(row)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/notifications")
+async def delete_all_notifications(
+    user: User = Depends(require_parent),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await db.execute(
+        delete(NotificationEvent).where(NotificationEvent.family_id == user.family_id)
+    )
+    await db.commit()
+    return {"ok": True, "count": result.rowcount}
 
 
 @router.post("/devices/heartbeat")

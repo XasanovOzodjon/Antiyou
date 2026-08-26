@@ -59,6 +59,7 @@ data class SmsItem(
 )
 
 data class NotificationItem(
+    val id: Int,
     @SerializedName("package_name") val packageName: String,
     val title: String?,
     val text: String?,
@@ -174,6 +175,24 @@ class ApiClient(private val session: SessionStore) {
     suspend fun notifications(): List<NotificationItem> {
         val req = auth(Request.Builder().url("$baseUrl/notifications")).get().build()
         return execList(req, object : TypeToken<List<NotificationItem>>() {}.type)
+    }
+
+    suspend fun deleteNotification(id: Int) {
+        val req = auth(Request.Builder().url("$baseUrl/notifications/$id")).delete().build()
+        withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+            }
+        }
+    }
+
+    suspend fun deleteAllNotifications() {
+        val req = auth(Request.Builder().url("$baseUrl/notifications")).delete().build()
+        withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+            }
+        }
     }
 
     suspend fun media(): List<MediaItem> {
