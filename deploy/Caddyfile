@@ -1,11 +1,31 @@
 {
 	email {$TLS_EMAIL}
+	default_sni download.khasanoff.uz
+	servers {
+		protocols h1 h2
+	}
+}
+
+http://download.khasanoff.uz {
+	encode gzip
+	request_body {
+		max_size 80MB
+	}
+	reverse_proxy api:8000
 }
 
 download.khasanoff.uz {
 	encode gzip
 	request_body {
 		max_size 80MB
+	}
+	tls {
+		issuer acme {
+			email {$TLS_EMAIL}
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
 	}
 	reverse_proxy api:8000
 }

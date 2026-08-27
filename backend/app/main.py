@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from app.api import auth, chat, media, sync
 from app.bootstrap import ensure_default_parent
@@ -42,6 +43,18 @@ app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(sync.router)
 app.include_router(media.router)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root() -> str:
+    return (
+        "<!doctype html><meta charset='utf-8'><title>Family Guard</title>"
+        "<body style='font-family:sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem'>"
+        "<h1>Family Guard API</h1>"
+        "<p>Server ishlayapti. Domen: <b>download.khasanoff.uz</b></p>"
+        "<p><a href='/health'>/health</a> · <a href='/docs'>/docs</a></p>"
+        "</body>"
+    )
 
 
 @app.get("/health")
