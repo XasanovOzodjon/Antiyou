@@ -6,7 +6,7 @@ HOST="${DEPLOY_HOST:-ubuntu@download.khasanoff.uz}"
 KEY="${DEPLOY_KEY:-$HOME/.ssh/Ozodjon.pem}"
 REMOTE_DIR="${DEPLOY_DIR:-/home/ubuntu/antiyou}"
 
-ssh_cmd=(ssh -o BatchMode=yes -i "$KEY" "$HOST")
+ssh_cmd=(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$HOST")
 rsync -az \
   --exclude '.git/' \
   --exclude '.venv/' \
@@ -17,7 +17,7 @@ rsync -az \
   --exclude '**/.gradle/' \
   --exclude '**/build/' \
   --exclude '**/*.apk' \
-  -e "ssh -o BatchMode=yes -i $KEY" \
+  -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $KEY" \
   "$ROOT/" "$HOST:$REMOTE_DIR/"
 
 "${ssh_cmd[@]}" bash -s -- "$REMOTE_DIR" <<'REMOTE'
