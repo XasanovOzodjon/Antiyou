@@ -16,7 +16,6 @@ rsync -az \
   --exclude '**/__pycache__/' \
   --exclude '**/.gradle/' \
   --exclude '**/build/' \
-  --exclude '**/*.apk' \
   -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $KEY" \
   "$ROOT/" "$HOST:$REMOTE_DIR/"
 

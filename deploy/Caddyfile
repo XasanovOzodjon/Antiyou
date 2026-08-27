@@ -14,7 +14,7 @@ http://download.khasanoff.uz {
 	reverse_proxy api:8000
 }
 
-download.khasanoff.uz {
+https://download.khasanoff.uz {
 	encode gzip
 	request_body {
 		max_size 80MB

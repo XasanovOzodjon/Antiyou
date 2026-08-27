@@ -30,6 +30,7 @@ services:
       MEDIA_DIR: /app/uploads
     volumes:
       - media:/app/uploads
+      - ./public:/app/public:ro
     depends_on:
       db:
         condition: service_healthy
