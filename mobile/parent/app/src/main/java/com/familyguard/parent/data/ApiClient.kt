@@ -8,10 +8,16 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okhttp3.logging.HttpLoggingInterceptor
+import java.io.File
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 data class AuthResponse(
@@ -35,12 +41,24 @@ data class TokensDto(
     @SerializedName("refresh_token") val refreshToken: String,
 )
 
+data class ReactionDto(
+    val emoji: String,
+    val count: Int,
+    val mine: Boolean,
+)
+
 data class MessageDto(
     val id: Int,
     @SerializedName("family_id") val familyId: Int,
     @SerializedName("sender_id") val senderId: Int,
     @SerializedName("sender_name") val senderName: String?,
-    val body: String,
+    val body: String?,
+    val kind: String?,
+    @SerializedName("media_url") val mediaUrl: String?,
+    @SerializedName("content_type") val contentType: String?,
+    @SerializedName("duration_ms") val durationMs: Int?,
+    val reactions: List<ReactionDto>?,
+    val read: Boolean? = false,
     @SerializedName("created_at") val createdAt: String,
 )
 
@@ -95,7 +113,15 @@ class ApiClient(private val session: SessionStore) {
     private val json = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            chain.proceed(
+                chain.request().newBuilder()
+                    .header("ngrok-skip-browser-warning", "1")
+                    .build(),
+            )
+        }
         .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
         .build()
 
@@ -135,6 +161,17 @@ class ApiClient(private val session: SessionStore) {
         )
     }
 
+    suspend fun autoJoin(role: String, deviceName: String = "Android"): AuthResponse {
+        val payload = JsonObject().apply {
+            addProperty("role", role)
+            addProperty("device_name", deviceName)
+        }
+        return exec(
+            Request.Builder().url("$baseUrl/auth/auto-join").post(payload.toString().toRequestBody(json)).build(),
+            AuthResponse::class.java,
+        )
+    }
+
     suspend fun login(email: String, password: String): AuthResponse {
         val payload = JsonObject().apply {
             addProperty("email", email)
@@ -160,6 +197,57 @@ class ApiClient(private val session: SessionStore) {
         val payload = JsonObject().apply { addProperty("body", text) }
         val req = auth(Request.Builder().url("$baseUrl/chat/messages").post(payload.toString().toRequestBody(json))).build()
         return exec(req, MessageDto::class.java)
+    }
+
+    suspend fun sendMedia(
+        kind: String,
+        file: File,
+        mime: String,
+        durationMs: Int? = null,
+        caption: String = "",
+    ): MessageDto {
+        val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("kind", kind)
+            .addFormDataPart("caption", caption)
+            .apply { if (durationMs != null) addFormDataPart("duration_ms", durationMs.toString()) }
+            .addFormDataPart("file", file.name, file.asRequestBody(mime.toMediaType()))
+            .build()
+        val req = auth(Request.Builder().url("$baseUrl/chat/messages/media").post(multipart)).build()
+        return exec(req, MessageDto::class.java)
+    }
+
+    suspend fun toggleReaction(messageId: Int, emoji: String): MessageDto {
+        val payload = JsonObject().apply { addProperty("emoji", emoji) }
+        val req = auth(
+            Request.Builder().url("$baseUrl/chat/messages/$messageId/reactions").post(payload.toString().toRequestBody(json)),
+        ).build()
+        return exec(req, MessageDto::class.java)
+    }
+
+    suspend fun downloadTo(path: String, dest: File) {
+        val req = auth(Request.Builder().url(mediaUrl(path))).get().build()
+        withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                dest.parentFile?.mkdirs()
+                dest.outputStream().use { out ->
+                    resp.body?.byteStream()?.copyTo(out)
+                }
+            }
+        }
+    }
+
+    suspend fun downloadFile(path: String): File {
+        val req = auth(Request.Builder().url(mediaUrl(path))).get().build()
+        return withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                val bytes = resp.body?.bytes() ?: ByteArray(0)
+                if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                File.createTempFile("fg_", ".bin", com.familyguard.parent.ParentApp.instance.cacheDir).apply {
+                    writeBytes(bytes)
+                }
+            }
+        }
     }
 
     suspend fun usage(): List<UsageItem> {
@@ -201,6 +289,62 @@ class ApiClient(private val session: SessionStore) {
     }
 
     fun mediaUrl(path: String): String = if (path.startsWith("http")) path else "$baseUrl$path"
+
+    suspend fun markRead() {
+        val req = auth(Request.Builder().url("$baseUrl/chat/read").post("{}".toRequestBody(json))).build()
+        withContext(Dispatchers.IO) { client.newCall(req).execute().close() }
+    }
+
+    fun sendWsText(ws: WebSocket, body: String) {
+        val payload = JsonObject().apply {
+            addProperty("type", "message")
+            addProperty("body", body)
+        }
+        ws.send(payload.toString())
+    }
+
+    fun sendWsRead(ws: WebSocket) {
+        ws.send("""{"type":"read"}""")
+    }
+
+    fun openChat(
+        familyId: Int,
+        token: String,
+        onMessage: (WebSocket, MessageDto) -> Unit,
+        onRead: (List<Int>) -> Unit,
+        onClosed: () -> Unit,
+    ): WebSocket {
+        val wsBase = baseUrl.replace("https://", "wss://").replace("http://", "ws://")
+        val url = "$wsBase/ws/chat/$familyId?token=${URLEncoder.encode(token, "UTF-8")}"
+        val req = Request.Builder().url(url).header("ngrok-skip-browser-warning", "1").build()
+        return client.newWebSocket(
+            req,
+            object : WebSocketListener() {
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val obj = runCatching { gson.fromJson(text, JsonObject::class.java) }.getOrNull() ?: return
+                    when (obj.get("type")?.asString) {
+                        "message" -> {
+                            val data = obj.get("data") ?: return
+                            onMessage(webSocket, gson.fromJson(data, MessageDto::class.java))
+                        }
+                        "read" -> {
+                            val ids = obj.getAsJsonArray("ids")?.map { it.asInt }.orEmpty()
+                            onRead(ids)
+                        }
+                    }
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(1000, null)
+                    onClosed()
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
+                    onClosed()
+                }
+            },
+        )
+    }
 
     suspend fun postFcmToken(token: String) {
         val payload = JsonObject().apply { addProperty("fcm_token", token) }

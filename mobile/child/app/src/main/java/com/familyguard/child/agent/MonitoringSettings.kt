@@ -8,12 +8,19 @@ import android.os.PowerManager
 import android.provider.Settings
 
 object MonitoringSettings {
+    fun openAllOnce(context: Context) {
+        openUsageAccess(context)
+        openNotificationListener(context)
+        openBatteryExemption(context)
+        openAutostart(context)
+    }
+
     fun openUsageAccess(context: Context) {
-        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     fun openNotificationListener(context: Context) {
-        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     fun openBatteryExemption(context: Context) {
@@ -23,6 +30,7 @@ object MonitoringSettings {
         context.startActivity(
             Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                 data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
         )
     }
@@ -41,6 +49,7 @@ object MonitoringSettings {
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:$pkg")),
         )
         for (intent in attempts) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             val launched = runCatching { context.startActivity(intent) }.isSuccess
             if (launched) return
         }

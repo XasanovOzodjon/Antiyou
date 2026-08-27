@@ -245,13 +245,19 @@ async def dashboard(
     if not family:
         raise HTTPException(status_code=404, detail="Family not found")
 
-    # mark offline if no heartbeat in 2 minutes
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
     devices_result = await db.execute(select(Device).where(Device.family_id == family.id))
     devices = list(devices_result.scalars().all())
     for d in devices:
-        if d.last_seen_at and d.last_seen_at.replace(tzinfo=timezone.utc) < cutoff:
+        seen = d.last_seen_at
+        if seen is None:
             d.is_online = False
+            continue
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        else:
+            seen = seen.astimezone(timezone.utc)
+        d.is_online = seen >= cutoff
     await db.commit()
 
     today = datetime.now(timezone.utc).date()

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -17,15 +18,16 @@ class ParentRegister(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=1, max_length=255)
     password: str
 
 
 class ChildPairRequest(BaseModel):
-    pairing_code: str = Field(min_length=6, max_length=6)
-    display_name: str = Field(min_length=1, max_length=120)
+    pairing_code: str | None = Field(default=None, max_length=32)
+    login: str | None = Field(default=None, max_length=120)
+    display_name: str = Field(default="Bola", min_length=1, max_length=120)
     device_name: str = Field(default="Android", max_length=120)
-    chat_pin: str = Field(min_length=4, max_length=8)
+    chat_pin: str = Field(default="131415", min_length=4, max_length=8)
 
 
 class UserOut(BaseModel):
@@ -53,8 +55,23 @@ class AuthResponse(BaseModel):
     device_id: int | None = None
 
 
+class AutoJoinRequest(BaseModel):
+    role: Literal["parent", "child"]
+    device_name: str = Field(default="Android", max_length=120)
+
+
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+
+
+class ReactionCreate(BaseModel):
+    emoji: str = Field(min_length=1, max_length=16)
+
+
+class ReactionOut(BaseModel):
+    emoji: str
+    count: int
+    mine: bool
 
 
 class MessageOut(BaseModel):
@@ -63,6 +80,12 @@ class MessageOut(BaseModel):
     sender_id: int
     sender_name: str | None = None
     body: str
+    kind: str = "text"
+    media_url: str | None = None
+    content_type: str | None = None
+    duration_ms: int | None = None
+    reactions: list[ReactionOut] = Field(default_factory=list)
+    read: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

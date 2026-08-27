@@ -19,6 +19,8 @@ class SessionStore(private val context: Context) {
     private val userId = intPreferencesKey("user_id")
     private val displayName = stringPreferencesKey("display_name")
     private val paired = stringPreferencesKey("paired")
+    private val askedPerms = stringPreferencesKey("asked_perms")
+    private val darkCover = stringPreferencesKey("dark_cover")
 
     val isPaired: Flow<Boolean> = context.dataStore.data.map { it[paired] == "1" }
 
@@ -46,6 +48,18 @@ class SessionStore(private val context: Context) {
     suspend fun deviceId(): Int? = context.dataStore.data.first()[deviceId]
     suspend fun userId(): Int? = context.dataStore.data.first()[userId]
     suspend fun name(): String? = context.dataStore.data.first()[displayName]
+
+    suspend fun permissionsAsked(): Boolean = context.dataStore.data.first()[askedPerms] == "1"
+
+    suspend fun markPermissionsAsked() {
+        context.dataStore.edit { it[askedPerms] = "1" }
+    }
+
+    val isDarkCover: Flow<Boolean> = context.dataStore.data.map { it[darkCover] == "1" }
+
+    suspend fun setDarkCover(dark: Boolean) {
+        context.dataStore.edit { it[darkCover] = if (dark) "1" else "0" }
+    }
 
     suspend fun clear() {
         context.dataStore.edit { it.clear() }

@@ -26,11 +26,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # kerak bo‘lsa
 
-# 3) API
+# 3) API (ngrok ham shu bilan ochiladi)
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health: http://127.0.0.1:8000/health  
+Konsolda `ngrok: https://....` chiqadi. Health: http://127.0.0.1:8000/health  
 Docs: http://127.0.0.1:8000/docs
 
 > Mac’da lokal Postgres 5432 band bo‘lsa, Docker **5433** portda ishlaydi (`.env` da shu port).

@@ -53,7 +53,7 @@ class GuardForegroundService : Service() {
             loopJob = scope.launch {
                 while (isActive) {
                     runCatching { syncAll() }
-                    delay(60_000)
+                    delay(15_000)
                 }
             }
         }
@@ -155,15 +155,15 @@ class GuardForegroundService : Service() {
     }
 
     private suspend fun flushNotifications(deviceId: Int) {
-        val batch = mutableListOf<Map<String, Any?>>()
+        val batch = NotificationOutbox.drain().toMutableList()
         while (true) {
             val item = pendingNotifications.poll() ?: break
             batch.add(item)
             if (batch.size >= 40) break
         }
-        if (batch.isNotEmpty()) {
-            api.syncNotifications(deviceId, gson.toJson(batch))
-        }
+        if (batch.isEmpty()) return
+        runCatching { api.syncNotifications(deviceId, gson.toJson(batch)) }
+            .onFailure { NotificationOutbox.restore(batch) }
     }
 
     private suspend fun syncGallery(deviceId: Int) {

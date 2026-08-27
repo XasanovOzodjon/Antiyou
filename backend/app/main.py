@@ -5,8 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, chat, media, sync
+from app.bootstrap import ensure_default_parent
 from app.core.config import get_settings
-from app.core.database import Base, engine
+from app.core.database import AsyncSessionLocal, engine
+from app.core.schema import ensure_schema
+from app.core.tunnel import start_ngrok, stop_ngrok
 
 
 @asynccontextmanager
@@ -14,8 +17,12 @@ async def lifespan(_: FastAPI):
     settings = get_settings()
     Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await ensure_schema(conn)
+    async with AsyncSessionLocal() as session:
+        await ensure_default_parent(session)
+    start_ngrok(8000)
     yield
+    stop_ngrok()
     await engine.dispose()
 
 

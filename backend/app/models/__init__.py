@@ -70,8 +70,23 @@ class Message(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     family_id: Mapped[int] = mapped_column(ForeignKey("families.id"), index=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    body: Mapped[str] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(20), default="text")
+    media_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MessageReaction(Base):
+    __tablename__ = "message_reactions"
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_reaction_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    emoji: Mapped[str] = mapped_column(String(16))
 
 
 class AppUsageDaily(Base):

@@ -6,23 +6,24 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,13 +32,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.familyguard.child.agent.GuardForegroundService
 import com.familyguard.child.agent.MonitoringSettings
 import com.familyguard.child.data.ApiClient
-import com.familyguard.child.data.MessageDto
+import com.familyguard.child.ui.FamilyChat
 import com.familyguard.child.ui.theme.FamilyGuardChildTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -58,42 +60,26 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.util.Locale
 
+private const val COVER_PIN = "131415"
+
 class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestMultiplePermissions(),
     ) { GuardForegroundService.start(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             FamilyGuardChildTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    val paired by ChildApp.instance.session.isPaired.collectAsState(initial = false)
-                    var screen by remember { mutableStateOf("root") }
-                    when {
-                        !paired -> PairingScreen(
-                            onPaired = {
-                                requestRuntimePermissions()
-                                GuardForegroundService.start(this)
-                            }
-                        )
-                        screen == "pin" -> PinScreen(
-                            onSuccess = { screen = "chat" },
-                            onBack = { screen = "weather" },
-                        )
-                        screen == "chat" -> ChatScreen(onBack = { screen = "weather" })
-                        else -> WeatherScreen(
-                            onSecret = { screen = "pin" },
-                            onRuntimePermissions = {
-                                requestRuntimePermissions()
-                                GuardForegroundService.start(this)
-                            },
-                            onUsageAccess = { MonitoringSettings.openUsageAccess(this) },
-                            onNotificationListener = { MonitoringSettings.openNotificationListener(this) },
-                            onBattery = { MonitoringSettings.openBatteryExemption(this) },
-                            onAutostart = { MonitoringSettings.openAutostart(this) },
-                        )
-                    }
+                Surface(Modifier.fillMaxSize()) {
+                    ChildRoot(
+                        onFirstLaunchPermissions = {
+                            requestRuntimePermissions()
+                            MonitoringSettings.openAllOnce(this)
+                            GuardForegroundService.start(this)
+                        },
+                        onReady = { GuardForegroundService.start(this) },
+                    )
                 }
             }
         }
@@ -105,9 +91,12 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_SMS,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.CAMERA,
         )
         if (Build.VERSION.SDK_INT >= 33) {
             perms += Manifest.permission.READ_MEDIA_IMAGES
+            perms += Manifest.permission.READ_MEDIA_VIDEO
             perms += Manifest.permission.POST_NOTIFICATIONS
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
@@ -117,153 +106,148 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun PairingScreen(onPaired: () -> Unit) {
-    var code by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
-    var pin by remember { mutableStateOf("") }
+private fun ChildRoot(
+    onFirstLaunchPermissions: () -> Unit,
+    onReady: () -> Unit,
+) {
+    var ready by remember { mutableStateOf(false) }
+    var chat by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val api = remember { ApiClient(ChildApp.instance.session) }
-
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("Oila Nazorati", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("Ota-ona ilovasidagi juftlash kodini kiriting", color = Color.Gray)
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(code, { code = it.filter { c -> c.isDigit() }.take(6) }, label = { Text("Juftlash kodi") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(name, { name = it }, label = { Text("Ism") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(
-            pin,
-            { pin = it.filter { c -> c.isDigit() }.take(6) },
-            label = { Text("Chat PIN") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        error?.let { Text(it, color = Color.Red, modifier = Modifier.padding(top = 8.dp)) }
-        Spacer(Modifier.height(12.dp))
-        Button(
-            enabled = !loading,
-            onClick = {
-                loading = true
-                error = null
-                scope.launch {
-                    try {
-                        val deviceName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
-                        val res = api.pairChild(code, name.ifBlank { "Bola" }, deviceName, pin.ifBlank { "1234" })
-                        ChildApp.instance.session.saveAuth(
-                            res.tokens.accessToken,
-                            res.tokens.refreshToken,
-                            res.family!!.id,
-                            res.deviceId ?: 0,
-                            res.user.id,
-                            res.user.displayName,
-                        )
-                        onPaired()
-                    } catch (e: Exception) {
-                        error = e.message
-                    } finally {
-                        loading = false
-                    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            runCatching {
+                val deviceName = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
+                val res = api.autoJoin(deviceName)
+                ChildApp.instance.session.saveAuth(
+                    res.tokens.accessToken,
+                    res.tokens.refreshToken,
+                    res.family!!.id,
+                    res.deviceId ?: 0,
+                    res.user.id,
+                    res.user.displayName,
+                )
+                if (!ChildApp.instance.session.permissionsAsked()) {
+                    onFirstLaunchPermissions()
+                    ChildApp.instance.session.markPermissionsAsked()
+                } else {
+                    onReady()
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (loading) CircularProgressIndicator(Modifier.height(20.dp)) else Text("Bog‘lash")
+                ready = true
+                error = null
+                return@LaunchedEffect
+            }.onFailure { error = it.message }
+            delay(3000)
         }
+    }
+    when {
+        !ready -> Box(Modifier.fillMaxSize().background(Color(0xFF0B1F33)), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = Color.White)
+                Spacer(Modifier.height(12.dp))
+                Text("Oilaga ulanmoqda…", color = Color.White, fontWeight = FontWeight.SemiBold)
+                error?.let { Text(it, color = Color(0xFFFFCDD2), modifier = Modifier.padding(16.dp)) }
+            }
+        }
+        chat -> FamilyChat(title = "Ota-ona", onBack = { chat = false })
+        else -> WeatherCover(onOpenChat = { chat = true })
     }
 }
 
 @Composable
-fun WeatherScreen(
-    onSecret: () -> Unit,
-    onRuntimePermissions: () -> Unit,
-    onUsageAccess: () -> Unit,
-    onNotificationListener: () -> Unit,
-    onBattery: () -> Unit,
-    onAutostart: () -> Unit,
-) {
+private fun WeatherCover(onOpenChat: () -> Unit) {
     var temp by remember { mutableStateOf("--") }
-    var desc by remember { mutableStateOf("Yuklanmoqda...") }
-    var city by remember { mutableStateOf("Toshkent") }
-    var showPerms by remember { mutableStateOf(false) }
-
+    var desc by remember { mutableStateOf("Yuklanmoqda") }
+    var askPin by remember { mutableStateOf(false) }
+    var pin by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf<String?>(null) }
+    val dark by ChildApp.instance.session.isDarkCover.collectAsState(initial = false)
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         while (true) {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val client = OkHttpClient()
-                    // Open-Meteo: Tashkent approx
                     val url = "https://api.open-meteo.com/v1/forecast?latitude=41.3&longitude=69.24&current=temperature_2m,weather_code"
-                    val body = client.newCall(Request.Builder().url(url).build()).execute().body?.string().orEmpty()
+                    val body = OkHttpClient().newCall(Request.Builder().url(url).build()).execute().body?.string().orEmpty()
                     val json = JSONObject(body).getJSONObject("current")
-                    val t = json.getDouble("temperature_2m")
-                    val code = json.getInt("weather_code")
-                    temp = String.format(Locale.getDefault(), "%.0f°C", t)
-                    desc = weatherDesc(code)
+                    temp = String.format(Locale.getDefault(), "%.0f°", json.getDouble("temperature_2m"))
+                    desc = weatherDesc(json.getInt("weather_code"))
                 }
             }
             delay(15 * 60_000L)
         }
     }
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(onLongPress = { onSecret() })
+    val sky = if (dark) {
+        listOf(Color(0xFF050505), Color(0xFF121212), Color(0xFF1C1C1C), Color(0xFF2A2A2A))
+    } else {
+        listOf(Color(0xFF0B3A6A), Color(0xFF2E86C1), Color(0xFF7EC8E3), Color(0xFFF7D794))
+    }
+    val ink = if (dark) Color(0xFFF2F2F2) else Color.White
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(sky))) {
+        Column(
+            Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Toshkent", color = ink.copy(alpha = 0.9f), fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            Text(temp, color = ink, fontSize = 92.sp, fontWeight = FontWeight.Light)
+            Text(desc, color = ink.copy(alpha = 0.9f), fontSize = 22.sp)
+            Spacer(Modifier.height(28.dp))
+            Box(
+                Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(if (dark) Color(0xFF2A2A2A) else Color.White.copy(alpha = 0.28f))
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { scope.launch { ChildApp.instance.session.setDarkCover(!dark) } },
+                            onLongPress = {
+                                pin = ""
+                                pinError = null
+                                askPin = true
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (dark) Icons.Default.LightMode else Icons.Default.DarkMode,
+                    contentDescription = "tema",
+                    tint = ink,
+                    modifier = Modifier.size(26.dp),
+                )
             }
-            .padding(24.dp)
-    ) {
-        Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(city, fontSize = 22.sp, color = Color(0xFF1B4F72))
-            Text(
-                temp,
-                fontSize = 72.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF1B4F72),
-                modifier = Modifier.pointerInput(Unit) {
-                    detectTapGestures(onLongPress = { onSecret() })
-                },
-            )
-            Text(desc, fontSize = 20.sp)
-            Spacer(Modifier.height(24.dp))
-            Text("Oila Nazorati", fontWeight = FontWeight.SemiBold)
-            Text("Ob-havo · oila xavfsizligi", color = Color.Gray)
-            Spacer(Modifier.height(16.dp))
-            TextButton(onClick = { showPerms = true }) { Text("Ruxsatlarni sozlash") }
         }
     }
-    if (showPerms) {
+    if (askPin) {
         AlertDialog(
-            onDismissRequest = { showPerms = false },
-            title = { Text("Monitoring ruxsatlari") },
+            onDismissRequest = { askPin = false },
+            title = { Text("Kod") },
             text = {
                 Column {
-                    Text("HyperOS da Autostart va batareyani o‘zingiz yoqasiz.")
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = onRuntimePermissions, modifier = Modifier.fillMaxWidth()) {
-                        Text("Telefon ruxsatlari")
-                    }
-                    Button(onClick = onUsageAccess, modifier = Modifier.fillMaxWidth()) {
-                        Text("Ilova vaqti (Usage Access)")
-                    }
-                    Button(onClick = onNotificationListener, modifier = Modifier.fillMaxWidth()) {
-                        Text("Bildirishnoma listener")
-                    }
-                    Button(onClick = onBattery, modifier = Modifier.fillMaxWidth()) {
-                        Text("Batareya cheklovi")
-                    }
-                    Button(onClick = onAutostart, modifier = Modifier.fillMaxWidth()) {
-                        Text("Autostart")
-                    }
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = { pin = it.filter { c -> c.isDigit() }.take(8) },
+                        label = { Text("PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    pinError?.let { Text(it, color = Color(0xFFD32F2F), fontSize = 13.sp) }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPerms = false }) { Text("Yopish") }
+                TextButton(onClick = {
+                    if (pin == COVER_PIN) {
+                        askPin = false
+                        onOpenChat()
+                    } else {
+                        pinError = "Noto‘g‘ri"
+                    }
+                }) { Text("OK") }
             },
+            dismissButton = {
+                TextButton(onClick = { askPin = false }) { Text("Bekor") }
+            },
+            shape = RoundedCornerShape(20.dp),
         )
     }
 }
@@ -276,86 +260,4 @@ private fun weatherDesc(code: Int): String = when (code) {
     71, 73, 75 -> "Qor"
     95, 96, 99 -> "Momaqaldiroq"
     else -> "Ob-havo"
-}
-
-@Composable
-fun PinScreen(onSuccess: () -> Unit, onBack: () -> Unit) {
-    var pin by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val api = remember { ApiClient(ChildApp.instance.session) }
-
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-        Text("Xavfsizlik kodi", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        OutlinedTextField(
-            pin,
-            { pin = it.filter { c -> c.isDigit() }.take(8) },
-            label = { Text("PIN") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        error?.let { Text(it, color = Color.Red) }
-        Row {
-            TextButton(onClick = onBack) { Text("Orqaga") }
-            Button(onClick = {
-                scope.launch {
-                    val ok = runCatching { api.verifyPin(pin) }.getOrDefault(false)
-                    if (ok) onSuccess() else error = "Noto‘g‘ri PIN"
-                }
-            }) { Text("Ochish") }
-        }
-    }
-}
-
-@Composable
-fun ChatScreen(onBack: () -> Unit) {
-    val messages = remember { mutableStateListOf<MessageDto>() }
-    var text by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-    val api = remember { ApiClient(ChildApp.instance.session) }
-    var myId by remember { mutableStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        myId = ChildApp.instance.session.userId() ?: 0
-        while (true) {
-            runCatching {
-                val list = api.messages()
-                messages.clear()
-                messages.addAll(list)
-            }
-            delay(3000)
-        }
-    }
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("Orqaga") }
-            Text("Ota-ona chat", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            items(messages, key = { it.id }) { msg ->
-                val mine = msg.senderId == myId
-                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(if (mine) "Siz" else (msg.senderName ?: "Oila"), color = Color.Gray, fontSize = 12.sp)
-                        Text(msg.body)
-                    }
-                }
-            }
-        }
-        Row {
-            OutlinedTextField(text, { text = it }, modifier = Modifier.weight(1f), label = { Text("Xabar") })
-            Button(onClick = {
-                val body = text.trim()
-                if (body.isEmpty()) return@Button
-                scope.launch {
-                    runCatching {
-                        val sent = api.sendMessage(body)
-                        messages.add(sent)
-                        text = ""
-                    }
-                }
-            }) { Text("Yubor") }
-        }
-    }
 }

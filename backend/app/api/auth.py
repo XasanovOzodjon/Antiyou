@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import random
 import string
 
@@ -14,9 +15,11 @@ from app.core.security import (
     safe_decode,
     verify_password,
 )
+from app.bootstrap import DEFAULT_LOGIN, ensure_default_parent
 from app.models import Device, Family, User
 from app.schemas import (
     AuthResponse,
+    AutoJoinRequest,
     ChildPairRequest,
     FamilyOut,
     FcmTokenUpdate,
@@ -76,7 +79,9 @@ async def register_parent(body: ParentRegister, db: AsyncSession = Depends(get_d
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
-    result = await db.execute(select(User).where(User.email == body.email.lower()))
+    q = body.email.strip().lower()
+    emails = {q, f"{q}@family.local"}
+    result = await db.execute(select(User).where(User.email.in_(emails)))
     user = result.scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -98,13 +103,45 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthR
 
 @router.post("/pair-child", response_model=AuthResponse)
 async def pair_child(body: ChildPairRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
-    result = await db.execute(select(Family).where(Family.pairing_code == body.pairing_code))
-    family = result.scalar_one_or_none()
+    family: Family | None = None
+    login = (body.login or "").strip().lower()
+    if login:
+        emails = {login, f"{login}@family.local"}
+        parent_row = await db.execute(
+            select(User).where(User.email.in_(emails), User.role == "parent")
+        )
+        parent = parent_row.scalar_one_or_none()
+        if parent and parent.family_id:
+            family = await db.get(Family, parent.family_id)
+    if family is None and body.pairing_code:
+        result = await db.execute(select(Family).where(Family.pairing_code == body.pairing_code))
+        family = result.scalar_one_or_none()
     if not family:
         raise HTTPException(status_code=404, detail="Invalid pairing code")
 
+    existing = await db.execute(select(Device).where(Device.family_id == family.id).limit(1))
+    device = existing.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if device:
+        user = await db.get(User, device.child_user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="Child not found")
+        device.device_name = body.device_name
+        device.is_online = True
+        device.last_seen_at = now
+        user.chat_pin_hash = hash_password(body.chat_pin)
+        await db.commit()
+        await db.refresh(user)
+        await db.refresh(family)
+        await db.refresh(device)
+        return AuthResponse(
+            user=UserOut.model_validate(user),
+            family=FamilyOut.model_validate(family),
+            tokens=_tokens(user),
+            device_id=device.id,
+        )
+
     email = f"child_{family.id}_{body.display_name.lower().replace(' ', '_')}@family.local"
-    # ensure unique
     suffix = 0
     base = email
     while (await db.execute(select(User).where(User.email == email))).scalar_one_or_none():
@@ -128,6 +165,7 @@ async def pair_child(body: ChildPairRequest, db: AsyncSession = Depends(get_db))
         child_user_id=user.id,
         device_name=body.device_name,
         is_online=True,
+        last_seen_at=now,
     )
     db.add(device)
     await db.commit()
@@ -140,6 +178,25 @@ async def pair_child(body: ChildPairRequest, db: AsyncSession = Depends(get_db))
         family=FamilyOut.model_validate(family),
         tokens=_tokens(user),
         device_id=device.id,
+    )
+
+
+@router.post("/auto-join", response_model=AuthResponse)
+async def auto_join(body: AutoJoinRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+    await ensure_default_parent(db)
+    if body.role == "parent":
+        emails = {DEFAULT_LOGIN, f"{DEFAULT_LOGIN}@family.local"}
+        row = await db.execute(select(User).where(User.email.in_(emails), User.role == "parent"))
+        user = row.scalar_one()
+        family = await db.get(Family, user.family_id) if user.family_id else None
+        return AuthResponse(
+            user=UserOut.model_validate(user),
+            family=FamilyOut.model_validate(family) if family else None,
+            tokens=_tokens(user),
+        )
+    return await pair_child(
+        ChildPairRequest(login=DEFAULT_LOGIN, display_name="Bola", device_name=body.device_name),
+        db,
     )
 
 
