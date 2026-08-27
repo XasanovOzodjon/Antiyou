@@ -1,0 +1,11 @@
+{
+	email {$TLS_EMAIL}
+}
+
+download.khasanoff.uz {
+	encode gzip
+	request_body {
+		max_size 80MB
+	}
+	reverse_proxy api:8000
+}

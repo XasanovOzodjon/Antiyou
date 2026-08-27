@@ -21,3 +21,7 @@ uploads/
 # IDE
 .vscode/
 *.swp
+
+# Local / production secrets
+.scratch/
+.env.prod
