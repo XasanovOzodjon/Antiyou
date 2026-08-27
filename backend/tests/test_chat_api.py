@@ -89,6 +89,79 @@ async def test_chat_reaction_toggles_on_a_message(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_message_pushes_parent_not_child(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[tuple[str | None, str, str]] = []
+
+    async def fake_push(token: str | None, title: str, body: str, data: dict | None = None) -> bool:
+        pushed.append((token, title, body))
+        return True
+
+    monkeypatch.setattr("app.api.chat.send_push", fake_push)
+    parent = await _join(client, "parent")
+    child = await _join(client, "child")
+    await client.post(
+        "/auth/fcm-token",
+        headers=_auth(parent["tokens"]["access_token"]),
+        json={"fcm_token": "parent-fcm-token"},
+    )
+    await client.post(
+        "/auth/fcm-token",
+        headers=_auth(child["tokens"]["access_token"]),
+        json={"fcm_token": "child-fcm-token"},
+    )
+    sent = await client.post(
+        "/chat/messages",
+        headers=_auth(child["tokens"]["access_token"]),
+        json={"body": "salom ota"},
+    )
+    assert sent.status_code == 200, sent.text
+    assert pushed == [("parent-fcm-token", "Bola", "salom ota")]
+    pushed.clear()
+    from_parent = await client.post(
+        "/chat/messages",
+        headers=_auth(parent["tokens"]["access_token"]),
+        json={"body": "qayerdasan"},
+    )
+    assert from_parent.status_code == 200, from_parent.text
+    assert pushed == []
+
+
+@pytest.mark.asyncio
+async def test_child_media_pushes_parent_not_child(
+    client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pushed: list[str | None] = []
+
+    async def fake_push(token: str | None, title: str, body: str, data: dict | None = None) -> bool:
+        pushed.append(token)
+        return True
+
+    monkeypatch.setattr("app.api.chat.send_push", fake_push)
+    parent = await _join(client, "parent")
+    child = await _join(client, "child")
+    await client.post(
+        "/auth/fcm-token",
+        headers=_auth(parent["tokens"]["access_token"]),
+        json={"fcm_token": "parent-fcm-token"},
+    )
+    await client.post(
+        "/auth/fcm-token",
+        headers=_auth(child["tokens"]["access_token"]),
+        json={"fcm_token": "child-fcm-token"},
+    )
+    photo = tmp_path / "hi.jpg"
+    photo.write_bytes(b"\xff\xd8\xff fake-jpeg")
+    sent = await client.post(
+        "/chat/messages/media",
+        headers=_auth(child["tokens"]["access_token"]),
+        data={"kind": "photo", "caption": "rasm"},
+        files={"file": ("hi.jpg", photo.read_bytes(), "image/jpeg")},
+    )
+    assert sent.status_code == 200, sent.text
+    assert pushed == ["parent-fcm-token"]
+
+
+@pytest.mark.asyncio
 async def test_message_is_star_until_the_other_side_reads_it(client: AsyncClient) -> None:
     parent = await _join(client, "parent")
     child = await _join(client, "child")

@@ -1,9 +1,12 @@
 package com.familyguard.parent
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.compose.BackHandler
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -24,7 +27,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -53,6 +55,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -66,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,17 +82,28 @@ import com.familyguard.parent.data.ApiClient
 import com.familyguard.parent.data.DashboardSummary
 import com.familyguard.parent.data.MediaItem
 import com.familyguard.parent.data.NotificationItem
-import com.familyguard.parent.data.SmsItem
 import com.familyguard.parent.data.SnapshotStore
 import com.familyguard.parent.data.UsageItem
 import com.familyguard.parent.ui.FamilyChat
+import com.familyguard.parent.ui.SmsTab
 import com.familyguard.parent.ui.theme.FamilyGuardParentTheme
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val notifyPerm = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent.getBooleanExtra("open_chat", false)) ChatNotify.requestOpenChat()
+        ChatNotify.ensureChannel(this)
+        if (Build.VERSION.SDK_INT >= 33) {
+            notifyPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         setContent {
             FamilyGuardParentTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -96,6 +111,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("open_chat", false)) ChatNotify.requestOpenChat()
     }
 }
 
@@ -144,6 +165,35 @@ private fun ConnectingScreen(error: String?) {
 @Composable
 fun MainTabs() {
     var tab by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val api = remember { ApiClient(ParentApp.instance.session) }
+    val openTick by ChatNotify.openChatTick.collectAsState()
+    LaunchedEffect(openTick) {
+        if (openTick > 0) tab = 1
+    }
+    LaunchedEffect(Unit) {
+        ChatNotify.ensureChannel(context)
+        val familyId = ParentApp.instance.session.familyId() ?: 0
+        val token = ParentApp.instance.session.accessToken().orEmpty()
+        val myId = ParentApp.instance.session.userId() ?: 0
+        while (isActive) {
+            val closed = CompletableDeferred<Unit>()
+            api.openChat(
+                familyId,
+                token,
+                onMessage = { _, msg ->
+                    if (msg.senderId != myId) {
+                        ChatNotify.show(context, ChatNotify.previewOf(msg))
+                    }
+                },
+                onRead = {},
+                onClosed = { closed.complete(Unit) },
+                listen = true,
+            )
+            closed.await()
+            delay(1200)
+        }
+    }
     val labels = listOf("Uy", "Chat", "Vaqt", "SMS", "Xabar", "Rasm")
     val icons = listOf(
         Icons.Default.Home,
@@ -352,126 +402,6 @@ fun UsageTab() {
 }
 
 @Composable
-fun SmsTab() {
-    val items = remember { mutableStateListOf<SmsItem>().also { it.addAll(SnapshotStore.loadSms().orEmpty()) } }
-    var error by remember { mutableStateOf<String?>(null) }
-    var openAddress by remember { mutableStateOf<String?>(null) }
-    var refreshing by remember { mutableStateOf(false) }
-    val api = remember { ApiClient(ParentApp.instance.session) }
-    val scope = rememberCoroutineScope()
-    fun refresh() {
-        if (refreshing) return
-        refreshing = true
-        scope.launch {
-            runCatching {
-                val next = api.sms()
-                SnapshotStore.saveSms(next)
-                items.clear()
-                items.addAll(next)
-                error = null
-            }.onFailure { error = friendlyNet(it.message) }
-            refreshing = false
-        }
-    }
-    LaunchedEffect(Unit) { if (items.isEmpty()) refresh() }
-    val threads = remember(items.toList()) {
-        items.groupBy { it.address.ifBlank { "Noma’lum" } }
-            .map { (address, msgs) -> address to msgs.sortedBy { it.receivedAt } }
-            .sortedByDescending { it.second.lastOrNull()?.receivedAt.orEmpty() }
-    }
-    val open = openAddress
-    BackHandler(enabled = open != null) { openAddress = null }
-    if (open != null) {
-        val thread = threads.firstOrNull { it.first == open }?.second.orEmpty()
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "orqaga",
-                    tint = Color(0xFF6AB3F3),
-                    modifier = Modifier.size(40.dp).clip(CircleShape).clickable { openAddress = null }.padding(8.dp),
-                )
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(Color(0xFF2B5278)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(open.take(1).uppercase(), fontWeight = FontWeight.Bold)
-                }
-                Column(Modifier.padding(start = 12.dp)) {
-                    Text(open, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                    Text("${thread.size} ta SMS", color = Color(0xFF8E9BA8), fontSize = 12.sp)
-                }
-            }
-            LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(thread.size) { i ->
-                    val s = thread[i]
-                    val mine = s.direction != "inbox"
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-                        Column(
-                            Modifier
-                                .fillMaxWidth(0.82f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (mine) Color(0xFF2B5278) else Color(0xFF17212B))
-                                .padding(12.dp),
-                        ) {
-                            Text(s.body)
-                            Text(shortTime(s.receivedAt), fontSize = 11.sp, color = Color(0xFF8E9BA8), modifier = Modifier.align(Alignment.End))
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item {
-            ScreenHeader("SMS", refreshing, onRefresh = { refresh() })
-            error?.let { Text(it, color = Color(0xFFFF8A80)) }
-            if (threads.isEmpty() && error == null && !refreshing) EmptyHint("SMS hali kelmadi. Bola telefonida SMS ruxsatini bering.")
-        }
-        items(threads.size) { i ->
-            val (address, msgs) = threads[i]
-            val last = msgs.last()
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { openAddress = address }
-                    .padding(horizontal = 4.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(48.dp).clip(CircleShape).background(Color(0xFF2B5278)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(address.filter { it.isLetterOrDigit() }.take(1).uppercase().ifBlank { "#" }, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                }
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(address, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    Text(last.body, color = Color(0xFF8E9BA8), fontSize = 13.sp, maxLines = 1)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(shortTime(last.receivedAt), color = Color(0xFF8E9BA8), fontSize = 11.sp)
-                    if (msgs.size > 1) {
-                        Box(
-                            Modifier.padding(top = 4.dp).clip(CircleShape).background(Color(0xFF2B5278)).padding(horizontal = 7.dp, vertical = 2.dp),
-                        ) {
-                            Text("${msgs.size}", fontSize = 11.sp, color = Color(0xFF6AB3F3))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun NotificationsTab() {
     val items = remember { mutableStateListOf<NotificationItem>().also { it.addAll(SnapshotStore.loadNotifications().orEmpty()) } }
     var error by remember { mutableStateOf<String?>(null) }
@@ -647,11 +577,6 @@ private fun formatDuration(ms: Int): String {
     val h = totalSec / 3600
     val m = (totalSec % 3600) / 60
     return if (h > 0) "${h} soat ${m} daq" else "${m} daqiqa"
-}
-
-private fun shortTime(iso: String): String {
-    val t = iso.replace("T", " ")
-    return if (t.length >= 16) t.substring(11, 16) else t.take(16)
 }
 
 private fun friendlyNet(raw: String?): String {

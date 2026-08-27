@@ -47,6 +47,19 @@ async def _reactions_for(db: AsyncSession, message_ids: list[int], viewer_id: in
     return out
 
 
+async def _push_parents(db: AsyncSession, family_id: int, sender_id: int, preview: str) -> None:
+    result = await db.execute(
+        select(User).where(
+            User.family_id == family_id,
+            User.id != sender_id,
+            User.role == "parent",
+        )
+    )
+    text = (preview or "Yangi xabar").strip()[:80] or "Yangi xabar"
+    for other in result.scalars().all():
+        await send_push(other.fcm_token, "Bola", text)
+
+
 async def _message_out(
     db: AsyncSession,
     msg: Message,
@@ -109,9 +122,7 @@ async def send_message(
         user.family_id,
         {"type": "message", "data": out.model_dump(mode="json")},
     )
-    others = await db.execute(select(User).where(User.family_id == user.family_id, User.id != user.id))
-    for other in others.scalars().all():
-        await send_push(other.fcm_token, "Yangi xabar", body.body[:80])
+    await _push_parents(db, user.family_id, user.id, body.body)
     return out
 
 
@@ -151,6 +162,7 @@ async def send_media_message(
         user.family_id,
         {"type": "message", "data": out.model_dump(mode="json")},
     )
+    await _push_parents(db, user.family_id, user.id, caption or kind)
     return out
 
 
@@ -234,7 +246,7 @@ async def toggle_reaction(
 
 
 @router.websocket("/ws/chat/{family_id}")
-async def chat_ws(websocket: WebSocket, family_id: int, token: str) -> None:
+async def chat_ws(websocket: WebSocket, family_id: int, token: str, listen: int = 0) -> None:
     payload = safe_decode(token)
     if not payload or payload.get("type") != "access":
         await websocket.close(code=4401)
@@ -245,15 +257,18 @@ async def chat_ws(websocket: WebSocket, family_id: int, token: str) -> None:
 
     await chat_manager.connect(family_id, websocket)
     reader_id = int(payload["sub"])
-    async with AsyncSessionLocal() as db:
-        ids = await _mark_read(db, family_id, reader_id)
-    if ids:
-        await chat_manager.broadcast(family_id, {"type": "read", "ids": ids})
+    if not listen:
+        async with AsyncSessionLocal() as db:
+            ids = await _mark_read(db, family_id, reader_id)
+        if ids:
+            await chat_manager.broadcast(family_id, {"type": "read", "ids": ids})
     try:
         while True:
             data = await websocket.receive_json()
             kind = data.get("type")
             if kind == "read":
+                if listen:
+                    continue
                 async with AsyncSessionLocal() as db:
                     read_ids = await _mark_read(db, family_id, reader_id)
                 if read_ids:
@@ -275,6 +290,7 @@ async def chat_ws(websocket: WebSocket, family_id: int, token: str) -> None:
                 await db.commit()
                 await db.refresh(msg)
                 out = await _message_out(db, msg, reader_id, [])
+                await _push_parents(db, family_id, reader_id, body)
             await chat_manager.broadcast(
                 family_id,
                 {"type": "message", "data": out.model_dump(mode="json")},

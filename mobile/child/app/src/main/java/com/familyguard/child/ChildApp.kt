@@ -1,6 +1,7 @@
 package com.familyguard.child
 
 import android.app.Application
+import com.familyguard.child.agent.GuardForegroundService
 import com.familyguard.child.data.SessionStore
 
 class ChildApp : Application() {
@@ -11,6 +12,7 @@ class ChildApp : Application() {
         super.onCreate()
         instance = this
         session = SessionStore(this)
+        runCatching { GuardForegroundService.start(this) }
     }
 
     companion object {

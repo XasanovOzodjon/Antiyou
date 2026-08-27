@@ -313,9 +313,11 @@ class ApiClient(private val session: SessionStore) {
         onMessage: (WebSocket, MessageDto) -> Unit,
         onRead: (List<Int>) -> Unit,
         onClosed: () -> Unit,
+        listen: Boolean = false,
     ): WebSocket {
         val wsBase = baseUrl.replace("https://", "wss://").replace("http://", "ws://")
-        val url = "$wsBase/ws/chat/$familyId?token=${URLEncoder.encode(token, "UTF-8")}"
+        val listenQ = if (listen) "&listen=1" else ""
+        val url = "$wsBase/ws/chat/$familyId?token=${URLEncoder.encode(token, "UTF-8")}$listenQ"
         val req = Request.Builder().url(url).header("ngrok-skip-browser-warning", "1").build()
         return client.newWebSocket(
             req,

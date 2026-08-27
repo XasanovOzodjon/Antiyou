@@ -37,8 +37,20 @@ Child qurilmasidagi holatni Parent ga ko‘rsatish. Ilova yoki saytni yopish ema
 _Avoid_: Blocking, filter, restriction, kiosk
 
 **Usage**:
-Child qaysi ilovani qancha ochiq tutgani. O‘rnatilgan ilovalar ro‘yxati shu oyna bilan birga ko‘rinadi.
+Child qaysi ilovani qancha ochiq tutgani. Launcher’dagi o‘rnatilgan ilovalar ham shu yerda, vaqti nol bo‘lsa ham; keyin o‘rnatilgani keyingi sinxronida chiqadi.
 _Avoid_: Screen time (glossary atamasi o‘rniga), analytics
+
+**Family Chat**:
+Parent va Child o‘rtasidagi ilova ichidagi suhbat (Child’da Cover + Chat PIN orqasida). Telefon SMS’i emas.
+_Avoid_: SMS, thread, Telegram (mahsulot nomi o‘rniga)
+
+**SMS**:
+Child qurilmasidagi operator xabarlari: boshqalardan kelgani va Child yozgan javob. Parent faqat ko‘radi, o‘zi yozmaydi.
+_Avoid_: Family Chat, message (chat ma’nosida), inbox (yo‘nalish o‘rniga butun tushuncha)
+
+**Read receipt**:
+Family Chat’da yuboruvchi ko‘radigan holat: bir belgi — yetkazilgan, ikki belgi — o‘qilgan.
+_Avoid_: tick, ptichka (glossary o‘rniga), delivered (alohida holat qilib)
 
 **Captured notification**:
 Child status barida paydo bo‘lgan bildirishnoma: ilova, sarlavha, matn, vaqt. Parent telefonidagi push emas. Parent bitta qatorni yoki hammasini o‘chirishi mumkin. Bir xil vaqtdagi bir xil nusxa saqlanmaydi.

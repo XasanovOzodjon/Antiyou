@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_child, require_parent
 from app.core.database import get_db
+from app.core.sms import WINDOW_SECONDS, address_key, collapse_sms, same_sms
 from app.models import AppUsageDaily, Device, Family, NotificationEvent, SmsEvent, User
 from app.schemas import (
     DashboardSummary,
@@ -101,7 +102,24 @@ async def sync_sms(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await _assert_device(db, user, body.device_id)
+    added = 0
+    accepted: list[SmsItem] = []
     for item in body.items:
+        if any(same_sms(item, prev) for prev in accepted):
+            continue
+        window_start = item.received_at - timedelta(seconds=WINDOW_SECONDS)
+        window_end = item.received_at + timedelta(seconds=WINDOW_SECONDS)
+        existing = await db.execute(
+            select(SmsEvent).where(
+                SmsEvent.device_id == body.device_id,
+                SmsEvent.body == item.body,
+                SmsEvent.direction == item.direction,
+                SmsEvent.received_at >= window_start,
+                SmsEvent.received_at <= window_end,
+            )
+        )
+        if any(address_key(row.address) == address_key(item.address) for row in existing.scalars().all()):
+            continue
         db.add(
             SmsEvent(
                 family_id=user.family_id,
@@ -112,25 +130,29 @@ async def sync_sms(
                 received_at=item.received_at,
             )
         )
+        accepted.append(item)
+        added += 1
     await db.commit()
-    return {"ok": True, "count": len(body.items)}
+    return {"ok": True, "count": added}
 
 
 @router.get("/sms", response_model=list[SmsItem])
 async def list_sms(
-    limit: int = 100,
+    limit: int = 200,
     user: User = Depends(require_parent),
     db: AsyncSession = Depends(get_db),
 ) -> list[SmsItem]:
+    cap = min(max(limit, 1), 200)
     result = await db.execute(
         select(SmsEvent)
         .where(SmsEvent.family_id == user.family_id)
-        .order_by(SmsEvent.received_at.desc())
-        .limit(min(limit, 200))
+        .order_by(SmsEvent.received_at.desc(), SmsEvent.id.desc())
+        .limit(min(cap * 3, 600))
     )
+    unique = collapse_sms(list(result.scalars().all()))[:cap]
     return [
         SmsItem(address=r.address, body=r.body, direction=r.direction, received_at=r.received_at)
-        for r in result.scalars().all()
+        for r in unique
     ]
 
 

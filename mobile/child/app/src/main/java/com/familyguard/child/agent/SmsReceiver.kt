@@ -18,19 +18,20 @@ import java.util.TimeZone
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+        val parts = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
+        if (parts.isEmpty()) return
         val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply {
             timeZone = TimeZone.getDefault()
         }
-        val items = messages.map {
+        val timestamp = parts.minOf { it.timestampMillis }
+        val items = listOf(
             mapOf(
-                "address" to (it.originatingAddress ?: ""),
-                "body" to (it.messageBody ?: ""),
+                "address" to (parts.first().originatingAddress ?: ""),
+                "body" to parts.joinToString("") { it.messageBody.orEmpty() },
                 "direction" to "inbox",
-                "received_at" to iso.format(Date(it.timestampMillis)),
-            )
-        }
-        if (items.isEmpty()) return
+                "received_at" to iso.format(Date(timestamp)),
+            ),
+        )
         CoroutineScope(Dispatchers.IO).launch {
             val session = ChildApp.instance.session
             val deviceId = session.deviceId() ?: return@launch
